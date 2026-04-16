@@ -4,20 +4,34 @@ import cors from "cors";
 const app = express();
 app.use(cors());
 
+// 🔥 in-memory cache (simple but effective)
+let lastGoodData = null;
+let lastFetchTime = 0;
+
 app.get("/api/predict", async (req, res) => {
   try {
     const symbol = req.query.symbol || "RELIANCE.NS";
 
-    // ✅ Direct Yahoo API (NO LIBRARY)
+    // ⏱ throttle: avoid hitting Yahoo too often
+    const now = Date.now();
+    if (now - lastFetchTime < 15000 && lastGoodData) {
+      return res.json({ ...lastGoodData, cached: true });
+    }
+
     const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbol}`;
 
     const response = await fetch(url);
-    const data = await response.json();
 
+    // ❗ Handle rate limit
+    if (!response.ok) {
+      throw new Error(`Yahoo error: ${response.status}`);
+    }
+
+    const data = await response.json();
     const quote = data.quoteResponse.result[0];
 
     if (!quote) {
-      return res.status(400).json({ error: "Invalid symbol" });
+      throw new Error("Invalid symbol");
     }
 
     const price = quote.regularMarketPrice;
@@ -25,7 +39,6 @@ app.get("/api/predict", async (req, res) => {
 
     const trend = price - previousClose;
 
-    // Smooth realistic forecast
     const hourlySeries = [];
     let base = price;
 
@@ -34,7 +47,7 @@ app.get("/api/predict", async (req, res) => {
       hourlySeries.push(Number(base.toFixed(2)));
     }
 
-    res.json({
+    const result = {
       symbol,
       price,
       previousClose,
@@ -57,10 +70,25 @@ app.get("/api/predict", async (req, res) => {
       signal: trend > 0 ? "BUY" : "HOLD",
       bias: trend > 0 ? "BULLISH" : "SIDEWAYS",
       risk: "MEDIUM"
-    });
+    };
+
+    // ✅ save cache
+    lastGoodData = result;
+    lastFetchTime = now;
+
+    res.json(result);
 
   } catch (err) {
-    console.error("FULL ERROR:", err);
+    console.error("ERROR:", err.message);
+
+    // ✅ fallback instead of crash
+    if (lastGoodData) {
+      return res.json({
+        ...lastGoodData,
+        warning: "Using cached data due to API limit"
+      });
+    }
+
     res.status(500).json({
       error: "Server error",
       details: err.message
@@ -68,7 +96,7 @@ app.get("/api/predict", async (req, res) => {
   }
 });
 
-// optional root
+// root
 app.get("/", (req, res) => {
   res.send("API Running 🚀");
 });
