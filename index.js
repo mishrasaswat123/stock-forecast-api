@@ -9,8 +9,8 @@ app.get("/api/predict", async (req, res) => {
   try {
     const symbol = req.query.symbol || "RELIANCE.NS";
 
-    // Fetch real market data
-    const quote = await yahooFinance.quote(symbol);
+    // ✅ FIXED CALL
+    const quote = await yahooFinance.default.quote(symbol);
 
     const price = quote.regularMarketPrice;
     const previousClose = quote.regularMarketPreviousClose;
@@ -19,7 +19,6 @@ app.get("/api/predict", async (req, res) => {
       return res.status(400).json({ error: "Invalid market data" });
     }
 
-    // Simple realistic trend (NOT random jumps)
     const trend = price - previousClose;
 
     const hourlySeries = [];
@@ -30,7 +29,7 @@ app.get("/api/predict", async (req, res) => {
       hourlySeries.push(Number(base.toFixed(2)));
     }
 
-    const response = {
+    res.json({
       symbol,
       price,
       previousClose,
@@ -53,13 +52,14 @@ app.get("/api/predict", async (req, res) => {
       signal: trend > 0 ? "BUY" : "HOLD",
       bias: trend > 0 ? "BULLISH" : "SIDEWAYS",
       risk: "MEDIUM"
-    };
-
-    res.json(response);
+    });
 
   } catch (err) {
-    console.error("ERROR:", err.message);
-    res.status(500).json({ error: "Server error", details: err.message });
+    console.error("ERROR:", err);
+    res.status(500).json({
+      error: "Server error",
+      details: err.message
+    });
   }
 });
 
