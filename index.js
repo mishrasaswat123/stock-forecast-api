@@ -1,17 +1,15 @@
 import express from "express";
 import cors from "cors";
 import admin from "firebase-admin";
+import fetch from "node-fetch";
 
 const app = express();
 app.use(cors());
 
-// 🔥 Load Firebase Key from ENV
+// 🔥 Firebase Init
 const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
-
-// 🔥 Fix private key formatting
 serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
 
-// 🔥 Init Firebase
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
@@ -36,6 +34,25 @@ function isMarketOpen() {
 }
 
 // ----------------------
+// FETCH REAL PRICE
+// ----------------------
+async function getLivePrice(symbol) {
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
+    const response = await fetch(url);
+    const data = await response.json();
+
+    const price =
+      data.chart.result[0].meta.regularMarketPrice;
+
+    return price;
+  } catch (err) {
+    console.log("Error fetching price:", err);
+    return null;
+  }
+}
+
+// ----------------------
 // SAVE DATA
 // ----------------------
 async function saveData(symbol, price) {
@@ -47,25 +64,21 @@ async function saveData(symbol, price) {
 }
 
 // ----------------------
-// GET DATA
-// ----------------------
-app.get("/api/data", async (req, res) => {
-  const snapshot = await db.collection("stocks").limit(50).get();
-  const data = snapshot.docs.map(doc => doc.data());
-  res.json(data);
-});
-
-// ----------------------
 // PRICE API
 // ----------------------
 app.get("/api/price", async (req, res) => {
   const symbol = req.query.symbol || "ANANDRATHI.NS";
 
-  let price = Math.floor(3000 + Math.random() * 700);
+  let price = await getLivePrice(symbol);
 
- if (isMarketOpen()) {
-  await saveData(symbol, price);
-}
+  // fallback if API fails
+  if (!price) {
+    price = Math.floor(3000 + Math.random() * 700);
+  }
+
+  if (isMarketOpen()) {
+    await saveData(symbol, price);
+  }
 
   res.json({
     symbol,
