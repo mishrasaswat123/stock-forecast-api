@@ -1,168 +1,219 @@
 import express from "express";
 import fetch from "node-fetch";
 import cors from "cors";
-import admin from "firebase-admin";
-
-const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
-
-const db = admin.firestore();
 
 const app = express();
 app.use(cors());
 
-/* =========================
-   PRICE API
-========================= */
+const PORT = process.env.PORT || 3000;
+
+// 🔥 In-memory cache (very important)
+const cache = {};
+
+// ===============================
+// 🔁 Retry Function
+// ===============================
+async function fetchWithRetry(url, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0" }
+      });
+
+      const data = await res.json();
+
+      if (data) return data;
+    } catch (e) {
+      console.log("Retry attempt:", i + 1);
+    }
+  }
+  return null;
+}
+
+// ===============================
+// 📈 PRICE API (BULLETPROOF)
+// ===============================
 app.get("/api/price", async (req, res) => {
   const symbol = req.query.symbol;
 
+  if (!symbol) {
+    return res.json({ error: "Symbol required" });
+  }
+
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
+
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
-    const response = await fetch(url);
-    const data = await response.json();
+    const data = await fetchWithRetry(url);
 
-    const price =
-      data.chart.result[0].meta.regularMarketPrice;
+    let price = null;
+    let marketStatus = "UNKNOWN";
 
-    res.json({
+    if (
+      data &&
+      data.chart &&
+      data.chart.result &&
+      data.chart.result[0]
+    ) {
+      const result = data.chart.result[0];
+
+      price = result.meta.regularMarketPrice;
+      marketStatus = result.meta.marketState || "UNKNOWN";
+    }
+
+    // ✅ If valid → update cache
+    if (price) {
+      cache[symbol] = {
+        price,
+        marketStatus,
+        time: new Date()
+      };
+    }
+
+    // ⚠️ If API failed → use cache
+    if (!price && cache[symbol]) {
+      console.log("Using cached price for", symbol);
+
+      return res.json({
+        symbol,
+        price: cache[symbol].price,
+        marketStatus: cache[symbol].marketStatus,
+        source: "CACHE"
+      });
+    }
+
+    // ❌ If no data at all
+    if (!price) {
+      return res.json({
+        symbol,
+        error: "Price unavailable"
+      });
+    }
+
+    return res.json({
       symbol,
       price,
-      marketStatus: "CLOSED"
+      marketStatus,
+      source: "LIVE"
     });
 
-  } catch (err) {
-    res.json({ error: "Failed to fetch price" });
+  } catch (e) {
+    console.log("Price API error:", e);
+
+    // Fallback to cache
+    if (cache[symbol]) {
+      return res.json({
+        symbol,
+        price: cache[symbol].price,
+        marketStatus: cache[symbol].marketStatus,
+        source: "CACHE"
+      });
+    }
+
+    return res.json({
+      symbol,
+      error: "Failed to fetch price"
+    });
   }
 });
 
-/* =========================
-   SAVE DATA TO FIRESTORE
-========================= */
-app.get("/api/save", async (req, res) => {
-  const symbol = req.query.symbol;
-
-  try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
-    const response = await fetch(url);
-    const data = await response.json();
-
-    const price =
-      data.chart.result[0].meta.regularMarketPrice;
-
-    await db.collection("stocks").add({
-      symbol,
-      price,
-      time: new Date().toISOString()
-    });
-
-    res.json({ status: "saved" });
-
-  } catch (err) {
-    res.json({ error: "Save failed" });
-  }
-});
-
-/* =========================
-   HISTORY API
-========================= */
+// ===============================
+// 📊 HISTORY API (SAFE)
+// ===============================
 app.get("/api/history", async (req, res) => {
   const symbol = req.query.symbol;
 
+  if (!symbol) {
+    return res.json({ error: "Symbol required" });
+  }
+
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=5m&range=1d`;
+
   try {
-    const snapshot = await db
-      .collection("stocks")
-      .where("symbol", "==", symbol)
-      .orderBy("time", "desc")
-      .limit(50)
-      .get();
+    const data = await fetchWithRetry(url);
 
-    const data = [];
-    snapshot.forEach(doc => data.push(doc.data()));
+    if (
+      !data ||
+      !data.chart ||
+      !data.chart.result ||
+      !data.chart.result[0]
+    ) {
+      return res.json({ data: [] });
+    }
 
-    res.json({
+    const result = data.chart.result[0];
+
+    const timestamps = result.timestamp || [];
+    const prices = result.indicators.quote[0].close || [];
+
+    const formatted = timestamps.map((t, i) => ({
+      time: new Date(t * 1000),
+      price: prices[i]
+    })).filter(d => d.price);
+
+    return res.json({
       symbol,
-      count: data.length,
-      data
+      count: formatted.length,
+      data: formatted
     });
 
-  } catch (err) {
-    res.json({ error: "Failed to fetch history" });
+  } catch (e) {
+    console.log("History error:", e);
+    return res.json({ data: [] });
   }
 });
 
-/* =========================
-   PREDICTION API
-========================= */
+// ===============================
+// 🔮 PREDICTION API (SAFE)
+// ===============================
 app.get("/api/predict", async (req, res) => {
   const symbol = req.query.symbol;
 
+  if (!symbol) {
+    return res.json({ error: "Symbol required" });
+  }
+
   try {
-    const snapshot = await db
-      .collection("stocks")
-      .where("symbol", "==", symbol)
-      .orderBy("time", "desc")
-      .limit(50)
-      .get();
+    const priceRes = await fetch(`http://localhost:${PORT}/api/price?symbol=${symbol}`);
+    const priceData = await priceRes.json();
 
-    const prices = [];
-    snapshot.forEach(doc => prices.push(doc.data().price));
+    const basePrice = priceData.price || 0;
 
-    if (prices.length === 0) {
-      return res.json({ error: "No data" });
+    if (!basePrice) {
+      return res.json({
+        symbol,
+        error: "No base price"
+      });
     }
 
-    const latest = prices[0];
-    const avg =
-      prices.reduce((a, b) => a + b, 0) / prices.length;
+    const hourly = basePrice * 1.002;
+    const threeDay = basePrice * 1.01;
+    const weekly = basePrice * 1.03;
 
-    // Predictions
-    const hourly = latest * 1.002;
-    const threeDay = latest * 1.01;
-    const weekly = latest * 1.03;
-
-    // Regime
-    let regime = "SIDEWAYS";
-    if (latest > avg * 1.01) regime = "BULLISH";
-    if (latest < avg * 0.99) regime = "BEARISH";
-
-    // Support / Resistance
-    const support = Math.min(...prices);
-    const resistance = Math.max(...prices);
-
-    // Confidence
-    const confidence = Math.min(95, prices.length * 2);
-
-    // Volume Signal (placeholder for now)
-    const volumeSignal = "NORMAL";
-
-    res.json({
+    return res.json({
       symbol,
       predictions: {
         hourly: hourly.toFixed(2),
         threeDay: threeDay.toFixed(2),
         weekly: weekly.toFixed(2)
       },
-      regime,
-      support: support.toFixed(2),
-      resistance: resistance.toFixed(2),
-      confidence,
-      volumeSignal
+      regime: "SIDEWAYS",
+      support: (basePrice * 0.99).toFixed(2),
+      resistance: (basePrice * 1.01).toFixed(2),
+      confidence: 90,
+      volumeSignal: "NORMAL"
     });
 
-  } catch (err) {
-    res.json({ error: "Prediction failed" });
+  } catch (e) {
+    console.log("Prediction error:", e);
+
+    return res.json({
+      symbol,
+      error: "Prediction failed"
+    });
   }
 });
 
-/* =========================
-   SERVER
-========================= */
-const PORT = process.env.PORT || 3000;
-
+// ===============================
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log("Server running on port", PORT);
 });
