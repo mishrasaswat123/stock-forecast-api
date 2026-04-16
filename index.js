@@ -7,9 +7,7 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-// 🔒 Cache
 let lastResult = null;
-let lastUpdated = null;
 
 function isMarketOpen() {
   const now = new Date();
@@ -20,7 +18,6 @@ function isMarketOpen() {
   const hour = indiaTime.getHours();
   const minute = indiaTime.getMinutes();
 
-  // Market: 9:15 AM to 3:30 PM
   return (
     (hour > 9 || (hour === 9 && minute >= 15)) &&
     (hour < 15 || (hour === 15 && minute <= 30))
@@ -29,8 +26,10 @@ function isMarketOpen() {
 
 app.get("/api/price", async (req, res) => {
   try {
-    // 🛑 If market closed → return cached result
-    if (!isMarketOpen() && lastResult) {
+    const marketOpen = isMarketOpen();
+
+    // Return cached if market closed
+    if (!marketOpen && lastResult) {
       return res.json(lastResult);
     }
 
@@ -83,12 +82,10 @@ app.get("/api/price", async (req, res) => {
     const macdTrend =
       macdLine.at(-1) > signalLine.at(-1) ? "BULLISH" : "BEARISH";
 
-    // Support / Resistance
     const recent = closes.slice(-20);
     const support = Math.min(...recent);
     const resistance = Math.max(...recent);
 
-    // Volume Signal
     const recentVol =
       volumes.slice(-5).reduce((a, b) => a + b, 0) / 5;
     const avgVol =
@@ -98,7 +95,6 @@ app.get("/api/price", async (req, res) => {
     if (recentVol > avgVol * 1.2) volumeSignal = "ACCUMULATION";
     if (recentVol < avgVol * 0.8) volumeSignal = "DISTRIBUTION";
 
-    // Momentum
     let momentum = changePct;
 
     if (rsi > 70) momentum -= 0.01;
@@ -118,15 +114,11 @@ app.get("/api/price", async (req, res) => {
       Math.max(55, Math.round(Math.abs(momentum) * 200))
     );
 
-    const marketOpen = isMarketOpen();
-
-    // Hourly Forecast
     let hourly = [],
       base = ltp;
 
     for (let i = 1; i <= 6; i++) {
       const noise = marketOpen ? (Math.random() - 0.5) * volatility : 0;
-
       base = base * (1 + momentum + noise);
 
       hourly.push({
@@ -138,13 +130,11 @@ app.get("/api/price", async (req, res) => {
       });
     }
 
-    // 3-Day Forecast
     let forecast3d = [],
       temp = ltp;
 
     for (let d = 1; d <= 3; d++) {
       const noise = marketOpen ? (Math.random() - 0.5) * volatility : 0;
-
       temp = temp * (1 + momentum + noise);
 
       forecast3d.push({
@@ -156,7 +146,6 @@ app.get("/api/price", async (req, res) => {
       });
     }
 
-    // Weekly
     let weekly = [],
       baseW = ltp;
 
@@ -188,9 +177,7 @@ app.get("/api/price", async (req, res) => {
       marketStatus: marketOpen ? "OPEN" : "CLOSED",
     };
 
-    // ✅ Save cache
     lastResult = finalResult;
-    lastUpdated = new Date();
 
     res.json(finalResult);
   } catch (err) {
