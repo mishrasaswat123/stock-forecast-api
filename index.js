@@ -1,49 +1,34 @@
 import express from "express";
+import fetch from "node-fetch";
 import cors from "cors";
 import admin from "firebase-admin";
-import fetch from "node-fetch";
 
-const app = express();
-app.use(cors());
-
-// 🔥 Firebase Init
+// 🔥 Initialize Firebase
 const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
-serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
+  credential: admin.credential.cert(serviceAccount)
 });
 
 const db = admin.firestore();
 
-// ----------------------
-// MARKET STATUS
-// ----------------------
-function isMarketOpen() {
-  const now = new Date();
-  const hours = now.getHours();
-  const minutes = now.getMinutes();
-  const day = now.getDay();
+const app = express();
+app.use(cors());
 
-  if (day === 0 || day === 6) return false;
-  if (hours < 9 || hours > 15) return false;
-  if (hours === 9 && minutes < 15) return false;
-  if (hours === 15 && minutes > 30) return false;
-
-  return true;
-}
-
-// ----------------------
-// FETCH REAL PRICE
-// ----------------------
+/* ===============================
+   🔹 HELPER: GET LIVE PRICE
+   =============================== */
 async function getLivePrice(symbol) {
   try {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
     const response = await fetch(url);
     const data = await response.json();
 
-    const price =
-      data.chart.result[0].meta.regularMarketPrice;
+    const result = data.chart.result[0];
+
+    // ✅ Use LAST CANDLE CLOSE (more accurate than regularMarketPrice)
+    const closePrices = result.indicators.quote[0].close;
+    const price = closePrices[closePrices.length - 1];
 
     return price;
   } catch (err) {
@@ -52,47 +37,58 @@ async function getLivePrice(symbol) {
   }
 }
 
-// ----------------------
-// SAVE DATA
-// ----------------------
-async function saveData(symbol, price) {
-  await db.collection("stocks").add({
-    symbol,
-    price,
-    time: new Date().toISOString(),
-  });
+/* ===============================
+   🔹 STORE DATA IN FIREBASE
+   =============================== */
+async function storePrice(symbol, price) {
+  try {
+    await db.collection("stocks").add({
+      symbol,
+      price,
+      time: new Date().toISOString()
+    });
+  } catch (err) {
+    console.log("Error storing data:", err);
+  }
 }
 
-// ----------------------
-// PRICE API
-// ----------------------
+/* ===============================
+   🔹 API: GET PRICE
+   =============================== */
 app.get("/api/price", async (req, res) => {
-  const symbol = req.query.symbol || "ANANDRATHI.NS";
+  const symbol = req.query.symbol;
 
-  let price = await getLivePrice(symbol);
+  if (!symbol) {
+    return res.json({ error: "Symbol required" });
+  }
 
-  // fallback if API fails
+  const price = await getLivePrice(symbol);
+
   if (!price) {
-    price = Math.floor(3000 + Math.random() * 700);
+    return res.json({ error: "Failed to fetch price" });
   }
 
-  if (isMarketOpen()) {
-    await saveData(symbol, price);
-  }
+  // 🔥 Save to Firebase
+  await storePrice(symbol, price);
 
   res.json({
     symbol,
     price,
-    marketStatus: isMarketOpen() ? "OPEN" : "CLOSED",
+    marketStatus: "CLOSED" // (we’ll improve later)
   });
 });
 
-// ----------------------
+/* ===============================
+   🔹 API: HEALTH CHECK
+   =============================== */
 app.get("/", (req, res) => {
-  res.send("Stock API Running 🚀");
+  res.send("Stock API Running ✅");
 });
 
-// ----------------------
-app.listen(3000, () => {
-  console.log("Server running on port 3000");
+/* ===============================
+   🔹 START SERVER
+   =============================== */
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
