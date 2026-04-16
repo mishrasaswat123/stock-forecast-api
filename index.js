@@ -1,6 +1,7 @@
 import express from "express";
 import fetch from "node-fetch";
 import cors from "cors";
+import fs from "fs";
 
 const app = express();
 app.use(cors());
@@ -8,7 +9,11 @@ app.use(cors());
 const PORT = process.env.PORT || 3000;
 
 let lastResult = null;
+let lastSavedTime = null;
 
+// =========================
+// 🕒 MARKET HOURS CHECK
+// =========================
 function isMarketOpen() {
   const now = new Date();
   const indiaTime = new Date(
@@ -24,6 +29,45 @@ function isMarketOpen() {
   );
 }
 
+// =========================
+// 💾 SAVE DATA (HOURLY)
+// =========================
+function saveDataPoint(ltp, volume) {
+  const now = new Date();
+
+  // Save only once per hour
+  if (lastSavedTime && now - lastSavedTime < 60 * 60 * 1000) {
+    return;
+  }
+
+  const indiaTime = new Date(
+    now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+  );
+
+  const dataPoint = {
+    timestamp: now.toISOString(),
+    hour: indiaTime.getHours(),
+    day: indiaTime.getDay(),
+    price: ltp,
+    volume: volume,
+  };
+
+  let history = [];
+
+  try {
+    history = JSON.parse(fs.readFileSync("data.json"));
+  } catch (e) {}
+
+  history.push(dataPoint);
+
+  fs.writeFileSync("data.json", JSON.stringify(history, null, 2));
+
+  lastSavedTime = now;
+}
+
+// =========================
+// 🚀 MAIN API
+// =========================
 app.get("/api/price", async (req, res) => {
   try {
     const marketOpen = isMarketOpen();
@@ -53,7 +97,12 @@ app.get("/api/price", async (req, res) => {
     const prev = closes.at(-2);
     const changePct = (ltp - prev) / prev;
 
+    // 💾 Save hourly data
+    saveDataPoint(ltp, volumes.at(-1));
+
+    // =========================
     // RSI
+    // =========================
     let gains = 0,
       losses = 0;
     for (let i = closes.length - 14; i < closes.length; i++) {
@@ -64,7 +113,9 @@ app.get("/api/price", async (req, res) => {
     const rs = gains / (losses || 1);
     const rsi = 100 - 100 / (1 + rs);
 
-    // EMA
+    // =========================
+    // EMA + MACD
+    // =========================
     function ema(data, period) {
       let k = 2 / (period + 1);
       let emaArr = [data[0]];
@@ -82,10 +133,16 @@ app.get("/api/price", async (req, res) => {
     const macdTrend =
       macdLine.at(-1) > signalLine.at(-1) ? "BULLISH" : "BEARISH";
 
+    // =========================
+    // SUPPORT / RESISTANCE
+    // =========================
     const recent = closes.slice(-20);
     const support = Math.min(...recent);
     const resistance = Math.max(...recent);
 
+    // =========================
+    // VOLUME SIGNAL
+    // =========================
     const recentVol =
       volumes.slice(-5).reduce((a, b) => a + b, 0) / 5;
     const avgVol =
@@ -95,6 +152,9 @@ app.get("/api/price", async (req, res) => {
     if (recentVol > avgVol * 1.2) volumeSignal = "ACCUMULATION";
     if (recentVol < avgVol * 0.8) volumeSignal = "DISTRIBUTION";
 
+    // =========================
+    // MOMENTUM
+    // =========================
     let momentum = changePct;
 
     if (rsi > 70) momentum -= 0.01;
@@ -114,6 +174,9 @@ app.get("/api/price", async (req, res) => {
       Math.max(55, Math.round(Math.abs(momentum) * 200))
     );
 
+    // =========================
+    // FORECAST ENGINE
+    // =========================
     let hourly = [],
       base = ltp;
 
