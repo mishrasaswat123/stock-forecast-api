@@ -3,7 +3,7 @@ import fetch from "node-fetch";
 import cors from "cors";
 import admin from "firebase-admin";
 
-// 🔥 Initialize Firebase
+// 🔥 Firebase Init
 const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
 
 admin.initializeApp({
@@ -16,21 +16,47 @@ const app = express();
 app.use(cors());
 
 /* ===============================
-   🔹 HELPER: GET LIVE PRICE
+   🔹 GET LIVE PRICE (ROBUST)
    =============================== */
 async function getLivePrice(symbol) {
   try {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
-    const response = await fetch(url);
+
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0"
+      }
+    });
+
     const data = await response.json();
+
+    // ❗ Safety checks
+    if (!data.chart || !data.chart.result || !data.chart.result[0]) {
+      console.log("Invalid Yahoo response:", data);
+      return null;
+    }
 
     const result = data.chart.result[0];
 
-    // ✅ Use LAST CANDLE CLOSE (more accurate than regularMarketPrice)
-    const closePrices = result.indicators.quote[0].close;
-    const price = closePrices[closePrices.length - 1];
+    // ✅ Try candle close first
+    if (
+      result.indicators &&
+      result.indicators.quote &&
+      result.indicators.quote[0] &&
+      result.indicators.quote[0].close
+    ) {
+      const closePrices = result.indicators.quote[0].close;
+      const price = closePrices[closePrices.length - 1];
 
-    return price;
+      if (price) return price;
+    }
+
+    // 🔁 Fallback
+    if (result.meta && result.meta.regularMarketPrice) {
+      return result.meta.regularMarketPrice;
+    }
+
+    return null;
   } catch (err) {
     console.log("Error fetching price:", err);
     return null;
@@ -38,7 +64,7 @@ async function getLivePrice(symbol) {
 }
 
 /* ===============================
-   🔹 STORE DATA IN FIREBASE
+   🔹 STORE IN FIREBASE
    =============================== */
 async function storePrice(symbol, price) {
   try {
@@ -48,12 +74,12 @@ async function storePrice(symbol, price) {
       time: new Date().toISOString()
     });
   } catch (err) {
-    console.log("Error storing data:", err);
+    console.log("Firebase error:", err);
   }
 }
 
 /* ===============================
-   🔹 API: GET PRICE
+   🔹 API: PRICE
    =============================== */
 app.get("/api/price", async (req, res) => {
   const symbol = req.query.symbol;
@@ -68,18 +94,17 @@ app.get("/api/price", async (req, res) => {
     return res.json({ error: "Failed to fetch price" });
   }
 
-  // 🔥 Save to Firebase
   await storePrice(symbol, price);
 
   res.json({
     symbol,
     price,
-    marketStatus: "CLOSED" // (we’ll improve later)
+    marketStatus: "CLOSED"
   });
 });
 
 /* ===============================
-   🔹 API: HEALTH CHECK
+   🔹 ROOT
    =============================== */
 app.get("/", (req, res) => {
   res.send("Stock API Running ✅");
@@ -89,6 +114,7 @@ app.get("/", (req, res) => {
    🔹 START SERVER
    =============================== */
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
