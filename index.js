@@ -16,7 +16,7 @@ const app = express();
 app.use(cors());
 
 /* ===============================
-   🔹 GET LIVE PRICE (ROBUST)
+   🔹 GET LIVE PRICE
    =============================== */
 async function getLivePrice(symbol) {
   try {
@@ -30,15 +30,13 @@ async function getLivePrice(symbol) {
 
     const data = await response.json();
 
-    // ❗ Safety checks
     if (!data.chart || !data.chart.result || !data.chart.result[0]) {
-      console.log("Invalid Yahoo response:", data);
       return null;
     }
 
     const result = data.chart.result[0];
 
-    // ✅ Try candle close first
+    // ✅ Use last candle close
     if (
       result.indicators &&
       result.indicators.quote &&
@@ -51,7 +49,7 @@ async function getLivePrice(symbol) {
       if (price) return price;
     }
 
-    // 🔁 Fallback
+    // fallback
     if (result.meta && result.meta.regularMarketPrice) {
       return result.meta.regularMarketPrice;
     }
@@ -79,7 +77,7 @@ async function storePrice(symbol, price) {
 }
 
 /* ===============================
-   🔹 API: PRICE
+   🔹 API: LIVE PRICE
    =============================== */
 app.get("/api/price", async (req, res) => {
   const symbol = req.query.symbol;
@@ -101,6 +99,45 @@ app.get("/api/price", async (req, res) => {
     price,
     marketStatus: "CLOSED"
   });
+});
+
+/* ===============================
+   🔹 API: HISTORY (NEW 🔥)
+   =============================== */
+app.get("/api/history", async (req, res) => {
+  const symbol = req.query.symbol;
+
+  if (!symbol) {
+    return res.json({ error: "Symbol required" });
+  }
+
+  try {
+    const snapshot = await db
+      .collection("stocks")
+      .where("symbol", "==", symbol)
+      .orderBy("time", "desc")
+      .limit(50)
+      .get();
+
+    const data = [];
+
+    snapshot.forEach(doc => {
+      data.push(doc.data());
+    });
+
+    // reverse so oldest → newest (for charts)
+    data.reverse();
+
+    res.json({
+      symbol,
+      count: data.length,
+      data
+    });
+
+  } catch (err) {
+    console.log("History fetch error:", err);
+    res.json({ error: "Failed to fetch history" });
+  }
 });
 
 /* ===============================
