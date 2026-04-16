@@ -1,6 +1,5 @@
 import express from "express";
 import cors from "cors";
-import yahooFinance from "yahoo-finance2";
 
 const app = express();
 app.use(cors());
@@ -9,23 +8,29 @@ app.get("/api/predict", async (req, res) => {
   try {
     const symbol = req.query.symbol || "RELIANCE.NS";
 
-    // ✅ Correct universal call
-    const quote = await yahooFinance.quote(symbol);
+    // ✅ Direct Yahoo API (NO LIBRARY)
+    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbol}`;
+
+    const response = await fetch(url);
+    const data = await response.json();
+
+    const quote = data.quoteResponse.result[0];
+
+    if (!quote) {
+      return res.status(400).json({ error: "Invalid symbol" });
+    }
 
     const price = quote.regularMarketPrice;
     const previousClose = quote.regularMarketPreviousClose;
 
-    if (!price || !previousClose) {
-      return res.status(400).json({ error: "Invalid market data" });
-    }
-
     const trend = price - previousClose;
 
+    // Smooth realistic forecast
     const hourlySeries = [];
     let base = price;
 
     for (let i = 0; i < 10; i++) {
-      base = base + trend * 0.05 + Math.sin(i) * 0.2;
+      base = base + trend * 0.05 + Math.sin(i) * 0.1;
       hourlySeries.push(Number(base.toFixed(2)));
     }
 
@@ -55,7 +60,7 @@ app.get("/api/predict", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("FULL ERROR:", err); // 🔥 important for debugging
+    console.error("FULL ERROR:", err);
     res.status(500).json({
       error: "Server error",
       details: err.message
@@ -63,5 +68,10 @@ app.get("/api/predict", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+// optional root
+app.get("/", (req, res) => {
+  res.send("API Running 🚀");
+});
+
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log("Server running on port", PORT));
