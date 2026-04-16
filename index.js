@@ -98,7 +98,9 @@ app.get("/api/price", async (req, res) => {
     const changePct = (ltp - prev) / prev;
 
     // 💾 Save hourly data
-    saveDataPoint(ltp, volumes.at(-1));
+    if (marketOpen) {
+  saveDataPoint(ltp, volumes.at(-1));
+}
 
     // =========================
     // RSI
