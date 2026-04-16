@@ -2,11 +2,8 @@ import express from "express";
 import fetch from "node-fetch";
 import cors from "cors";
 import admin from "firebase-admin";
-import fs from "fs";
 
-const serviceAccount = JSON.parse(
-  fs.readFileSync("./serviceAccountKey.json", "utf-8")
-);
+const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
@@ -98,7 +95,7 @@ app.get("/api/history", async (req, res) => {
 });
 
 /* =========================
-   PREDICTION API (FIXED)
+   PREDICTION API
 ========================= */
 app.get("/api/predict", async (req, res) => {
   const symbol = req.query.symbol;
@@ -139,7 +136,7 @@ app.get("/api/predict", async (req, res) => {
     // Confidence
     const confidence = Math.min(95, prices.length * 2);
 
-    // Volume (mock)
+    // Volume Signal (placeholder for now)
     const volumeSignal = "NORMAL";
 
     res.json({
@@ -164,6 +161,8 @@ app.get("/api/predict", async (req, res) => {
 /* =========================
    SERVER
 ========================= */
-app.listen(3000, () => {
-  console.log("Server running...");
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
