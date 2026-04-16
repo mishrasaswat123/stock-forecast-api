@@ -4,25 +4,24 @@ import cors from "cors";
 const app = express();
 app.use(cors());
 
-// 🔥 in-memory cache (simple but effective)
-let lastGoodData = null;
-let lastFetchTime = 0;
+// simple cache
+let lastData = null;
+let lastFetch = 0;
 
 app.get("/api/predict", async (req, res) => {
   try {
     const symbol = req.query.symbol || "RELIANCE.NS";
 
-    // ⏱ throttle: avoid hitting Yahoo too often
     const now = Date.now();
-    if (now - lastFetchTime < 15000 && lastGoodData) {
-      return res.json({ ...lastGoodData, cached: true });
+
+    // ⏱ prevent hitting Yahoo too frequently
+    if (now - lastFetch < 20000 && lastData) {
+      return res.json({ ...lastData, cached: true });
     }
 
     const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbol}`;
-
     const response = await fetch(url);
 
-    // ❗ Handle rate limit
     if (!response.ok) {
       throw new Error(`Yahoo error: ${response.status}`);
     }
@@ -39,11 +38,12 @@ app.get("/api/predict", async (req, res) => {
 
     const trend = price - previousClose;
 
+    // smooth forecast (NOT random jumps)
     const hourlySeries = [];
     let base = price;
 
     for (let i = 0; i < 10; i++) {
-      base = base + trend * 0.05 + Math.sin(i) * 0.1;
+      base = base + trend * 0.03 + Math.sin(i) * 0.05;
       hourlySeries.push(Number(base.toFixed(2)));
     }
 
@@ -57,35 +57,35 @@ app.get("/api/predict", async (req, res) => {
       predictions: {
         hourly: hourlySeries[0],
         hourlySeries,
-        day1: Number((price + trend * 0.5).toFixed(2)),
-        day2: Number((price + trend * 0.8).toFixed(2)),
-        day3: Number((price + trend * 1.2).toFixed(2)),
-        weekly: Number((price + trend * 2).toFixed(2))
+        day1: Number((price + trend * 0.4).toFixed(2)),
+        day2: Number((price + trend * 0.7).toFixed(2)),
+        day3: Number((price + trend * 1.0).toFixed(2)),
+        weekly: Number((price + trend * 1.8).toFixed(2))
       },
 
       support: Number((price * 0.98).toFixed(2)),
       resistance: Number((price * 1.02).toFixed(2)),
 
-      confidence: 85,
+      confidence: 80,
       signal: trend > 0 ? "BUY" : "HOLD",
       bias: trend > 0 ? "BULLISH" : "SIDEWAYS",
       risk: "MEDIUM"
     };
 
-    // ✅ save cache
-    lastGoodData = result;
-    lastFetchTime = now;
+    // save cache
+    lastData = result;
+    lastFetch = now;
 
     res.json(result);
 
   } catch (err) {
     console.error("ERROR:", err.message);
 
-    // ✅ fallback instead of crash
-    if (lastGoodData) {
+    // fallback to last good data
+    if (lastData) {
       return res.json({
-        ...lastGoodData,
-        warning: "Using cached data due to API limit"
+        ...lastData,
+        warning: "Using cached data (Yahoo limit)"
       });
     }
 
@@ -96,9 +96,9 @@ app.get("/api/predict", async (req, res) => {
   }
 });
 
-// root
+// root check
 app.get("/", (req, res) => {
-  res.send("API Running 🚀");
+  res.send("Stock API running 🚀");
 });
 
 const PORT = process.env.PORT || 10000;
