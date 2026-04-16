@@ -8,9 +8,6 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-let lastResult = null;
-let lastSavedTime = null;
-
 // =========================
 // 🕒 MARKET HOURS
 // =========================
@@ -30,13 +27,12 @@ function isMarketOpen() {
 }
 
 // =========================
-// 💾 SAVE REAL DATA
+// 💾 SAVE REAL DATA (PER STOCK)
 // =========================
-function saveDataPoint(ltp, volume) {
+function saveDataPoint(symbol, ltp, volume) {
+  const fileName = `data-${symbol}.json`;
+
   const now = new Date();
-
-  if (lastSavedTime && now - lastSavedTime < 60 * 60 * 1000) return;
-
   const indiaTime = new Date(
     now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
   );
@@ -45,19 +41,17 @@ function saveDataPoint(ltp, volume) {
     date: indiaTime.toISOString().split("T")[0],
     hour: indiaTime.getHours(),
     price: ltp,
-    volume: volume,
+    volume,
     synthetic: false
   };
 
   let history = [];
   try {
-    history = JSON.parse(fs.readFileSync("data.json"));
+    history = JSON.parse(fs.readFileSync(fileName));
   } catch {}
 
   history.push(data);
-  fs.writeFileSync("data.json", JSON.stringify(history, null, 2));
-
-  lastSavedTime = now;
+  fs.writeFileSync(fileName, JSON.stringify(history, null, 2));
 }
 
 // =========================
@@ -98,12 +92,11 @@ function generateSyntheticHourly(data) {
 }
 
 // =========================
-// 🔗 MERGE DATASET
+// 🔗 MERGE DATA
 // =========================
 function mergeDatasets(synthetic, real) {
   const combined = [...synthetic, ...real];
 
-  // Remove duplicates
   const unique = {};
   combined.forEach(d => {
     const key = `${d.date}-${d.hour}`;
@@ -112,7 +105,6 @@ function mergeDatasets(synthetic, real) {
 
   const result = Object.values(unique);
 
-  // Sort
   result.sort((a, b) => {
     if (a.date === b.date) return a.hour - b.hour;
     return new Date(a.date) - new Date(b.date);
@@ -122,29 +114,33 @@ function mergeDatasets(synthetic, real) {
 }
 
 // =========================
-// 🚀 MAIN API
+// 📊 FETCH DATA
+// =========================
+async function fetchStockData(symbol) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=max&interval=1d`;
+
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      Accept: "application/json"
+    }
+  });
+
+  const json = await response.json();
+  const result = json.chart.result[0];
+  const quotes = result.indicators.quote[0];
+
+  return { result, quotes };
+}
+
+// =========================
+// 🚀 PRICE API
 // =========================
 app.get("/api/price", async (req, res) => {
   try {
-    const marketOpen = isMarketOpen();
+    const symbol = req.query.symbol || "ANANDRATHI.NS";
 
-    if (!marketOpen && lastResult) {
-      return res.json(lastResult);
-    }
-
-    const url =
-      "https://query1.finance.yahoo.com/v8/finance/chart/ANANDRATHI.NS?range=max&interval=1d";
-
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        Accept: "application/json"
-      }
-    });
-
-    const json = await response.json();
-    const result = json.chart.result[0];
-    const quotes = result.indicators.quote[0];
+    const { result, quotes } = await fetchStockData(symbol);
 
     const closes = quotes.close.filter(x => x);
     const volumes = quotes.volume.filter(x => x);
@@ -153,88 +149,45 @@ app.get("/api/price", async (req, res) => {
     const prev = closes.at(-2);
     const changePct = (ltp - prev) / prev;
 
-    if (marketOpen) {
-      saveDataPoint(ltp, volumes.at(-1));
+    if (isMarketOpen()) {
+      saveDataPoint(symbol, ltp, volumes.at(-1));
     }
-
-    // Indicators
-    let gains = 0, losses = 0;
-    for (let i = closes.length - 14; i < closes.length; i++) {
-      let diff = closes[i] - closes[i - 1];
-      if (diff > 0) gains += diff;
-      else losses -= diff;
-    }
-    const rsi = 100 - 100 / (1 + gains / (losses || 1));
-
-    function ema(data, p) {
-      let k = 2 / (p + 1);
-      let arr = [data[0]];
-      for (let i = 1; i < data.length; i++) {
-        arr.push(data[i] * k + arr[i - 1] * (1 - k));
-      }
-      return arr;
-    }
-
-    const macd = ema(closes, 12).map((v, i) => v - ema(closes, 26)[i]);
-    const signal = ema(macd, 9);
-    const macdTrend = macd.at(-1) > signal.at(-1) ? "BULLISH" : "BEARISH";
 
     const support = Math.min(...closes.slice(-20));
     const resistance = Math.max(...closes.slice(-20));
 
-    let momentum = changePct;
-    if (rsi > 70) momentum -= 0.01;
-    if (rsi < 30) momentum += 0.01;
-    if (macdTrend === "BULLISH") momentum += 0.005;
-    else momentum -= 0.005;
+    const momentum = changePct;
 
     const regime =
       momentum > 0.01 ? "BULLISH" :
       momentum < -0.01 ? "BEARISH" : "SIDEWAYS";
 
     const volatility = Math.max(0.008, Math.abs(momentum) * 1.5);
-    const confidence = Math.min(90, Math.max(55, Math.round(Math.abs(momentum) * 200)));
 
-    // Forecast
     let hourly = [], base = ltp;
+
     for (let i = 1; i <= 6; i++) {
       base *= 1 + momentum;
       hourly.push({
         hour: `${10 + i}:00`,
         price: Math.round(base),
         min: Math.round(base * (1 - volatility / 2)),
-        max: Math.round(base * (1 + volatility / 2)),
-        confidence
+        max: Math.round(base * (1 + volatility / 2))
       });
     }
 
-    const finalResult = {
+    res.json({
+      symbol,
       ltp: Math.round(ltp),
       regime,
-      confidence,
       hourly,
       support: Math.round(support),
       resistance: Math.round(resistance),
-      marketStatus: marketOpen ? "OPEN" : "CLOSED"
-    };
-
-    lastResult = finalResult;
-    res.json(finalResult);
+      marketStatus: isMarketOpen() ? "OPEN" : "CLOSED"
+    });
 
   } catch (err) {
     res.json({ ok: false, error: err.message });
-  }
-});
-
-// =========================
-// 📊 REAL DATA API
-// =========================
-app.get("/api/realdata", (req, res) => {
-  try {
-    const data = JSON.parse(fs.readFileSync("data.json"));
-    res.json(data.slice(-50));
-  } catch {
-    res.json([]);
   }
 });
 
@@ -243,19 +196,9 @@ app.get("/api/realdata", (req, res) => {
 // =========================
 app.get("/api/dataset", async (req, res) => {
   try {
-    const url =
-      "https://query1.finance.yahoo.com/v8/finance/chart/ANANDRATHI.NS?range=max&interval=1d";
+    const symbol = req.query.symbol || "ANANDRATHI.NS";
 
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        Accept: "application/json"
-      }
-    });
-
-    const json = await response.json();
-    const result = json.chart.result[0];
-    const quotes = result.indicators.quote[0];
+    const { result, quotes } = await fetchStockData(symbol);
 
     const timestamps = result.timestamp;
 
@@ -272,14 +215,28 @@ app.get("/api/dataset", async (req, res) => {
 
     let real = [];
     try {
-      real = JSON.parse(fs.readFileSync("data.json"));
+      real = JSON.parse(fs.readFileSync(`data-${symbol}.json`));
     } catch {}
 
     const dataset = mergeDatasets(synthetic, real);
 
     res.json(dataset.slice(-200));
+
   } catch (err) {
     res.json({ ok: false });
+  }
+});
+
+// =========================
+// 📊 REAL DATA API
+// =========================
+app.get("/api/realdata", (req, res) => {
+  try {
+    const symbol = req.query.symbol || "ANANDRATHI.NS";
+    const data = JSON.parse(fs.readFileSync(`data-${symbol}.json`));
+    res.json(data.slice(-50));
+  } catch {
+    res.json([]);
   }
 });
 
