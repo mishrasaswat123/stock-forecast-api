@@ -30,7 +30,7 @@ function isMarketOpen() {
 }
 
 // =========================
-// 💾 SAVE DATA
+// 💾 SAVE REAL DATA
 // =========================
 function saveDataPoint(ltp, volume) {
   const now = new Date();
@@ -42,9 +42,8 @@ function saveDataPoint(ltp, volume) {
   );
 
   const data = {
-    timestamp: now.toISOString(),
+    date: indiaTime.toISOString().split("T")[0],
     hour: indiaTime.getHours(),
-    day: indiaTime.getDay(),
     price: ltp,
     volume: volume,
     synthetic: false
@@ -99,6 +98,30 @@ function generateSyntheticHourly(data) {
 }
 
 // =========================
+// 🔗 MERGE DATASET
+// =========================
+function mergeDatasets(synthetic, real) {
+  const combined = [...synthetic, ...real];
+
+  // Remove duplicates
+  const unique = {};
+  combined.forEach(d => {
+    const key = `${d.date}-${d.hour}`;
+    unique[key] = d;
+  });
+
+  const result = Object.values(unique);
+
+  // Sort
+  result.sort((a, b) => {
+    if (a.date === b.date) return a.hour - b.hour;
+    return new Date(a.date) - new Date(b.date);
+  });
+
+  return result;
+}
+
+// =========================
 // 🚀 MAIN API
 // =========================
 app.get("/api/price", async (req, res) => {
@@ -134,37 +157,15 @@ app.get("/api/price", async (req, res) => {
       saveDataPoint(ltp, volumes.at(-1));
     }
 
-    // =========================
-    // DAILY DATA
-    // =========================
-    const timestamps = result.timestamp;
-
-    const historicalDaily = timestamps.map((t, i) => ({
-      date: new Date(t * 1000).toISOString().split("T")[0],
-      open: quotes.open[i],
-      high: quotes.high[i],
-      low: quotes.low[i],
-      close: quotes.close[i],
-      volume: quotes.volume[i]
-    })).filter(x => x.close);
-
-    const syntheticHourly = generateSyntheticHourly(historicalDaily);
-
-    // =========================
-    // RSI
-    // =========================
+    // Indicators
     let gains = 0, losses = 0;
     for (let i = closes.length - 14; i < closes.length; i++) {
       let diff = closes[i] - closes[i - 1];
       if (diff > 0) gains += diff;
       else losses -= diff;
     }
-    const rs = gains / (losses || 1);
-    const rsi = 100 - 100 / (1 + rs);
+    const rsi = 100 - 100 / (1 + gains / (losses || 1));
 
-    // =========================
-    // MACD
-    // =========================
     function ema(data, p) {
       let k = 2 / (p + 1);
       let arr = [data[0]];
@@ -176,97 +177,34 @@ app.get("/api/price", async (req, res) => {
 
     const macd = ema(closes, 12).map((v, i) => v - ema(closes, 26)[i]);
     const signal = ema(macd, 9);
+    const macdTrend = macd.at(-1) > signal.at(-1) ? "BULLISH" : "BEARISH";
 
-    const macdTrend =
-      macd.at(-1) > signal.at(-1) ? "BULLISH" : "BEARISH";
+    const support = Math.min(...closes.slice(-20));
+    const resistance = Math.max(...closes.slice(-20));
 
-    // =========================
-    // SUPPORT / RESISTANCE
-    // =========================
-    const recent = closes.slice(-20);
-    const support = Math.min(...recent);
-    const resistance = Math.max(...recent);
-
-    // =========================
-    // VOLUME SIGNAL
-    // =========================
-    const recentVol =
-      volumes.slice(-5).reduce((a, b) => a + b, 0) / 5;
-    const avgVol =
-      volumes.reduce((a, b) => a + b, 0) / volumes.length;
-
-    let volumeSignal = "NORMAL";
-    if (recentVol > avgVol * 1.2) volumeSignal = "ACCUMULATION";
-    if (recentVol < avgVol * 0.8) volumeSignal = "DISTRIBUTION";
-
-    // =========================
-    // MOMENTUM
-    // =========================
     let momentum = changePct;
-
     if (rsi > 70) momentum -= 0.01;
     if (rsi < 30) momentum += 0.01;
     if (macdTrend === "BULLISH") momentum += 0.005;
     else momentum -= 0.005;
-    if (volumeSignal === "ACCUMULATION") momentum += 0.005;
-    if (volumeSignal === "DISTRIBUTION") momentum -= 0.005;
 
-    let regime = "SIDEWAYS";
-    if (momentum > 0.01) regime = "BULLISH";
-    else if (momentum < -0.01) regime = "BEARISH";
+    const regime =
+      momentum > 0.01 ? "BULLISH" :
+      momentum < -0.01 ? "BEARISH" : "SIDEWAYS";
 
     const volatility = Math.max(0.008, Math.abs(momentum) * 1.5);
-    const confidence = Math.min(
-      90,
-      Math.max(55, Math.round(Math.abs(momentum) * 200))
-    );
+    const confidence = Math.min(90, Math.max(55, Math.round(Math.abs(momentum) * 200)));
 
-    // =========================
-    // FORECASTS
-    // =========================
+    // Forecast
     let hourly = [], base = ltp;
-
     for (let i = 1; i <= 6; i++) {
-      const noise = marketOpen ? (Math.random() - 0.5) * volatility : 0;
-      base = base * (1 + momentum + noise);
-
+      base *= 1 + momentum;
       hourly.push({
         hour: `${10 + i}:00`,
         price: Math.round(base),
         min: Math.round(base * (1 - volatility / 2)),
         max: Math.round(base * (1 + volatility / 2)),
-        confidence: confidence - (6 - i) * 2
-      });
-    }
-
-    let forecast3d = [], temp = ltp;
-
-    for (let d = 1; d <= 3; d++) {
-      const noise = marketOpen ? (Math.random() - 0.5) * volatility : 0;
-      temp = temp * (1 + momentum + noise);
-
-      forecast3d.push({
-        day: d,
-        low: Math.round(temp * (1 - volatility)),
-        high: Math.round(temp * (1 + volatility)),
-        direction: regime,
-        confidence: confidence + d * 3
-      });
-    }
-
-    let weekly = [], baseW = ltp;
-
-    for (let i = 1; i <= 5; i++) {
-      const noise = marketOpen
-        ? (Math.random() - 0.5) * volatility * 1.5
-        : 0;
-
-      baseW = baseW * (1 + momentum + noise);
-
-      weekly.push({
-        day: `D${i}`,
-        low: Math.round(baseW * (1 - volatility * 1.2)),
-        high: Math.round(baseW * (1 + volatility * 1.2))
+        confidence
       });
     }
 
@@ -275,27 +213,35 @@ app.get("/api/price", async (req, res) => {
       regime,
       confidence,
       hourly,
-      forecast3d,
-      weekly,
       support: Math.round(support),
       resistance: Math.round(resistance),
-      volumeSignal,
-      marketStatus: marketOpen ? "OPEN" : "CLOSED",
-      lastUpdated: new Date().toLocaleString("en-IN")
+      marketStatus: marketOpen ? "OPEN" : "CLOSED"
     };
 
     lastResult = finalResult;
-
     res.json(finalResult);
+
   } catch (err) {
     res.json({ ok: false, error: err.message });
   }
 });
 
 // =========================
-// DEBUG ENDPOINT
+// 📊 REAL DATA API
 // =========================
-app.get("/api/synthetic", async (req, res) => {
+app.get("/api/realdata", (req, res) => {
+  try {
+    const data = JSON.parse(fs.readFileSync("data.json"));
+    res.json(data.slice(-50));
+  } catch {
+    res.json([]);
+  }
+});
+
+// =========================
+// 📊 DATASET API
+// =========================
+app.get("/api/dataset", async (req, res) => {
   try {
     const url =
       "https://query1.finance.yahoo.com/v8/finance/chart/ANANDRATHI.NS?range=max&interval=1d";
@@ -322,11 +268,18 @@ app.get("/api/synthetic", async (req, res) => {
       volume: quotes.volume[i]
     })).filter(x => x.close);
 
-    const syntheticHourly = generateSyntheticHourly(historicalDaily);
+    const synthetic = generateSyntheticHourly(historicalDaily);
 
-    res.json(syntheticHourly.slice(-50));
+    let real = [];
+    try {
+      real = JSON.parse(fs.readFileSync("data.json"));
+    } catch {}
+
+    const dataset = mergeDatasets(synthetic, real);
+
+    res.json(dataset.slice(-200));
   } catch (err) {
-    res.json({ ok: false, error: err.message });
+    res.json({ ok: false });
   }
 });
 
