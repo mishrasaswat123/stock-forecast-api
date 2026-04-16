@@ -63,9 +63,7 @@ app.get("/api/price", async (req, res) => {
 
   let price = Math.floor(3000 + Math.random() * 700);
 
-  if (isMarketOpen()) {
-    await saveData(symbol, price);
-  }
+ await saveData(symbol, price);
 
   res.json({
     symbol,
