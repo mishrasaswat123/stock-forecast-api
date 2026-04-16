@@ -9,8 +9,8 @@ app.get("/api/predict", async (req, res) => {
   try {
     const symbol = req.query.symbol || "RELIANCE.NS";
 
-    // ✅ FIXED CALL
-    const quote = await yahooFinance.default.quote(symbol);
+    // ✅ Correct universal call
+    const quote = await yahooFinance.quote(symbol);
 
     const price = quote.regularMarketPrice;
     const previousClose = quote.regularMarketPreviousClose;
@@ -25,7 +25,7 @@ app.get("/api/predict", async (req, res) => {
     let base = price;
 
     for (let i = 0; i < 10; i++) {
-      base = base + trend * 0.05 + (Math.sin(i) * 0.2);
+      base = base + trend * 0.05 + Math.sin(i) * 0.2;
       hourlySeries.push(Number(base.toFixed(2)));
     }
 
@@ -55,7 +55,7 @@ app.get("/api/predict", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("ERROR:", err);
+    console.error("FULL ERROR:", err); // 🔥 important for debugging
     res.status(500).json({
       error: "Server error",
       details: err.message
