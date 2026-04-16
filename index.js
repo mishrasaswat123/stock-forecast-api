@@ -23,9 +23,7 @@ async function getLivePrice(symbol) {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
 
     const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0"
-      }
+      headers: { "User-Agent": "Mozilla/5.0" }
     });
 
     const data = await response.json();
@@ -36,27 +34,15 @@ async function getLivePrice(symbol) {
 
     const result = data.chart.result[0];
 
-    // ✅ Use last candle close
-    if (
-      result.indicators &&
-      result.indicators.quote &&
-      result.indicators.quote[0] &&
-      result.indicators.quote[0].close
-    ) {
-      const closePrices = result.indicators.quote[0].close;
-      const price = closePrices[closePrices.length - 1];
-
-      if (price) return price;
+    const closePrices = result.indicators?.quote?.[0]?.close;
+    if (closePrices) {
+      return closePrices[closePrices.length - 1];
     }
 
-    // fallback
-    if (result.meta && result.meta.regularMarketPrice) {
-      return result.meta.regularMarketPrice;
-    }
+    return result.meta?.regularMarketPrice || null;
 
-    return null;
   } catch (err) {
-    console.log("Error fetching price:", err);
+    console.log("Price fetch error:", err);
     return null;
   }
 }
@@ -77,7 +63,7 @@ async function storePrice(symbol, price) {
 }
 
 /* ===============================
-   🔹 API: LIVE PRICE
+   🔹 API: PRICE
    =============================== */
 app.get("/api/price", async (req, res) => {
   const symbol = req.query.symbol;
@@ -102,7 +88,7 @@ app.get("/api/price", async (req, res) => {
 });
 
 /* ===============================
-   🔹 API: HISTORY (NEW 🔥)
+   🔹 API: HISTORY (FIXED)
    =============================== */
 app.get("/api/history", async (req, res) => {
   const symbol = req.query.symbol;
@@ -115,18 +101,19 @@ app.get("/api/history", async (req, res) => {
     const snapshot = await db
       .collection("stocks")
       .where("symbol", "==", symbol)
-      .orderBy("time", "desc")
-      .limit(50)
       .get();
 
-    const data = [];
+    let data = [];
 
     snapshot.forEach(doc => {
       data.push(doc.data());
     });
 
-    // reverse so oldest → newest (for charts)
-    data.reverse();
+    // 🔥 SORT IN BACKEND (NO FIRESTORE INDEX NEEDED)
+    data.sort((a, b) => new Date(a.time) - new Date(b.time));
+
+    // 🔥 LIMIT LAST 50
+    data = data.slice(-50);
 
     res.json({
       symbol,
@@ -135,7 +122,7 @@ app.get("/api/history", async (req, res) => {
     });
 
   } catch (err) {
-    console.log("History fetch error:", err);
+    console.log("History error:", err);
     res.json({ error: "Failed to fetch history" });
   }
 });
