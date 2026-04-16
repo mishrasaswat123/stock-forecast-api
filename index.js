@@ -1,12 +1,15 @@
-const express = require("express");
-const cors = require("cors");
-const admin = require("firebase-admin");
+import express from "express";
+import cors from "cors";
+import admin from "firebase-admin";
 
 const app = express();
 app.use(cors());
 
 // 🔥 Load Firebase Key from ENV
 const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
+
+// 🔥 Fix private key formatting
+serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
 
 // 🔥 Init Firebase
 admin.initializeApp({
