@@ -12,7 +12,7 @@ let lastResult = null;
 let lastSavedTime = null;
 
 // =========================
-// 🕒 MARKET HOURS CHECK
+// 🕒 MARKET HOURS
 // =========================
 function isMarketOpen() {
   const now = new Date();
@@ -20,17 +20,17 @@ function isMarketOpen() {
     now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
   );
 
-  const hour = indiaTime.getHours();
-  const minute = indiaTime.getMinutes();
+  const h = indiaTime.getHours();
+  const m = indiaTime.getMinutes();
 
   return (
-    (hour > 9 || (hour === 9 && minute >= 15)) &&
-    (hour < 15 || (hour === 15 && minute <= 30))
+    (h > 9 || (h === 9 && m >= 15)) &&
+    (h < 15 || (h === 15 && m <= 30))
   );
 }
 
 // =========================
-// 💾 SAVE REAL HOURLY DATA
+// 💾 SAVE DATA
 // =========================
 function saveDataPoint(ltp, volume) {
   const now = new Date();
@@ -41,7 +41,7 @@ function saveDataPoint(ltp, volume) {
     now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
   );
 
-  const dataPoint = {
+  const data = {
     timestamp: now.toISOString(),
     hour: indiaTime.getHours(),
     day: indiaTime.getDay(),
@@ -51,41 +51,37 @@ function saveDataPoint(ltp, volume) {
   };
 
   let history = [];
-
   try {
     history = JSON.parse(fs.readFileSync("data.json"));
-  } catch (e) {}
+  } catch {}
 
-  history.push(dataPoint);
-
+  history.push(data);
   fs.writeFileSync("data.json", JSON.stringify(history, null, 2));
 
   lastSavedTime = now;
 }
 
 // =========================
-// 🧠 SYNTHETIC HOURLY ENGINE
+// 🧠 SYNTHETIC ENGINE
 // =========================
 function generateSyntheticHourly(data) {
   const synthetic = [];
 
   data.forEach((d) => {
-    const { open, high, low, close, volume } = d;
-
-    const range = high - low;
+    const range = d.high - d.low;
     const step = range / 6;
 
     let prices = [
-      open,
-      open + step * 0.8,
-      open + step * 0.5,
-      open + step * 0.3,
-      open + step * 1.2,
-      close
+      d.open,
+      d.open + step * 0.8,
+      d.open + step * 0.5,
+      d.open + step * 0.3,
+      d.open + step * 1.2,
+      d.close
     ];
 
-    prices = prices.map((p) =>
-      Math.min(high, Math.max(low, p))
+    prices = prices.map(p =>
+      Math.min(d.high, Math.max(d.low, p))
     );
 
     prices.forEach((p, i) => {
@@ -93,7 +89,7 @@ function generateSyntheticHourly(data) {
         date: d.date,
         hour: 10 + i,
         price: Math.round(p),
-        volume: Math.round(volume / 6),
+        volume: Math.round(d.volume / 6),
         synthetic: true
       });
     });
@@ -119,28 +115,27 @@ app.get("/api/price", async (req, res) => {
     const response = await fetch(url, {
       headers: {
         "User-Agent": "Mozilla/5.0",
-        Accept: "application/json",
-      },
+        Accept: "application/json"
+      }
     });
 
     const json = await response.json();
     const result = json.chart.result[0];
     const quotes = result.indicators.quote[0];
 
-    const closes = quotes.close.filter((x) => x);
-    const volumes = quotes.volume.filter((x) => x);
+    const closes = quotes.close.filter(x => x);
+    const volumes = quotes.volume.filter(x => x);
 
     const ltp = closes.at(-1);
     const prev = closes.at(-2);
     const changePct = (ltp - prev) / prev;
 
-    // 💾 SAVE REAL DATA ONLY DURING MARKET HOURS
     if (marketOpen) {
       saveDataPoint(ltp, volumes.at(-1));
     }
 
     // =========================
-    // BUILD DAILY DATASET
+    // DAILY DATA
     // =========================
     const timestamps = result.timestamp;
 
@@ -153,9 +148,6 @@ app.get("/api/price", async (req, res) => {
       volume: quotes.volume[i]
     })).filter(x => x.close);
 
-    // =========================
-    // SYNTHETIC DATA
-    // =========================
     const syntheticHourly = generateSyntheticHourly(historicalDaily);
 
     // =========================
@@ -173,22 +165,20 @@ app.get("/api/price", async (req, res) => {
     // =========================
     // MACD
     // =========================
-    function ema(data, period) {
-      let k = 2 / (period + 1);
-      let emaArr = [data[0]];
+    function ema(data, p) {
+      let k = 2 / (p + 1);
+      let arr = [data[0]];
       for (let i = 1; i < data.length; i++) {
-        emaArr.push(data[i] * k + emaArr[i - 1] * (1 - k));
+        arr.push(data[i] * k + arr[i - 1] * (1 - k));
       }
-      return emaArr;
+      return arr;
     }
 
-    const ema12 = ema(closes, 12);
-    const ema26 = ema(closes, 26);
-    const macdLine = ema12.map((v, i) => v - ema26[i]);
-    const signalLine = ema(macdLine, 9);
+    const macd = ema(closes, 12).map((v, i) => v - ema(closes, 26)[i]);
+    const signal = ema(macd, 9);
 
     const macdTrend =
-      macdLine.at(-1) > signalLine.at(-1) ? "BULLISH" : "BEARISH";
+      macd.at(-1) > signal.at(-1) ? "BULLISH" : "BEARISH";
 
     // =========================
     // SUPPORT / RESISTANCE
@@ -245,7 +235,7 @@ app.get("/api/price", async (req, res) => {
         price: Math.round(base),
         min: Math.round(base * (1 - volatility / 2)),
         max: Math.round(base * (1 + volatility / 2)),
-        confidence: confidence - (6 - i) * 2,
+        confidence: confidence - (6 - i) * 2
       });
     }
 
@@ -260,7 +250,7 @@ app.get("/api/price", async (req, res) => {
         low: Math.round(temp * (1 - volatility)),
         high: Math.round(temp * (1 + volatility)),
         direction: regime,
-        confidence: confidence + d * 3,
+        confidence: confidence + d * 3
       });
     }
 
@@ -276,7 +266,7 @@ app.get("/api/price", async (req, res) => {
       weekly.push({
         day: `D${i}`,
         low: Math.round(baseW * (1 - volatility * 1.2)),
-        high: Math.round(baseW * (1 + volatility * 1.2)),
+        high: Math.round(baseW * (1 + volatility * 1.2))
       });
     }
 
@@ -290,15 +280,15 @@ app.get("/api/price", async (req, res) => {
       support: Math.round(support),
       resistance: Math.round(resistance),
       volumeSignal,
-      lastUpdated: new Date().toLocaleString("en-IN"),
       marketStatus: marketOpen ? "OPEN" : "CLOSED",
+      lastUpdated: new Date().toLocaleString("en-IN")
     };
 
     lastResult = finalResult;
 
     res.json(finalResult);
   } catch (err) {
-    res.status(500).json({ ok: false });
+    res.json({ ok: false, error: err.message });
   }
 });
 
@@ -310,7 +300,13 @@ app.get("/api/synthetic", async (req, res) => {
     const url =
       "https://query1.finance.yahoo.com/v8/finance/chart/ANANDRATHI.NS?range=max&interval=1d";
 
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        Accept: "application/json"
+      }
+    });
+
     const json = await response.json();
     const result = json.chart.result[0];
     const quotes = result.indicators.quote[0];
@@ -330,7 +326,7 @@ app.get("/api/synthetic", async (req, res) => {
 
     res.json(syntheticHourly.slice(-50));
   } catch (err) {
-    res.json({ ok: false });
+    res.json({ ok: false, error: err.message });
   }
 });
 
