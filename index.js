@@ -75,20 +75,19 @@ async function fetchStockData(symbol) {
 }
 
 // =========================
-// 📈 TREND
+// 📈 TREND FUNCTION
 // =========================
-function detectTrend(closes) {
-  const short = closes.slice(-5);
-  const mid = closes.slice(-15);
+function getTrend(closes, period) {
+  const slice = closes.slice(-period);
+  const avg1 =
+    slice.slice(-5).reduce((a, b) => a + b, 0) / 5;
 
-  const avgShort = short.reduce((a, b) => a + b, 0) / short.length;
-  const avgMid = mid.reduce((a, b) => a + b, 0) / mid.length;
+  const avg2 =
+    slice.reduce((a, b) => a + b, 0) / slice.length;
 
-  const strength = (avgShort - avgMid) / avgMid;
-
-  if (strength > 0.01) return { trend: "BULLISH", strength };
-  if (strength < -0.01) return { trend: "BEARISH", strength };
-  return { trend: "SIDEWAYS", strength };
+  if (avg1 > avg2 * 1.01) return "BULLISH";
+  if (avg1 < avg2 * 0.99) return "BEARISH";
+  return "SIDEWAYS";
 }
 
 // =========================
@@ -105,6 +104,19 @@ function calculateRSI(closes) {
 
   const rs = gains / (losses || 1);
   return 100 - 100 / (1 + rs);
+}
+
+// =========================
+// 📊 VOLATILITY
+// =========================
+function calculateVolatility(closes) {
+  let sum = 0;
+
+  for (let i = closes.length - 10; i < closes.length; i++) {
+    sum += Math.abs(closes[i] - closes[i - 1]) / closes[i - 1];
+  }
+
+  return sum / 10;
 }
 
 // =========================
@@ -128,57 +140,63 @@ function detectPattern(closes) {
 }
 
 // =========================
-// 📊 VOLATILITY
+// 🧠 CONFLUENCE ENGINE
 // =========================
-function calculateVolatility(closes) {
-  let sum = 0;
+function confluenceEngine(short, medium, long) {
+  let score = 0;
 
-  for (let i = closes.length - 10; i < closes.length; i++) {
-    sum += Math.abs(closes[i] - closes[i - 1]) / closes[i - 1];
-  }
+  if (short === "BULLISH") score++;
+  if (medium === "BULLISH") score++;
+  if (long === "BULLISH") score++;
 
-  return sum / 10;
+  if (short === "BEARISH") score--;
+  if (medium === "BEARISH") score--;
+  if (long === "BEARISH") score--;
+
+  let confluence = "LOW";
+  if (Math.abs(score) === 3) confluence = "HIGH";
+  else if (Math.abs(score) === 2) confluence = "MEDIUM";
+
+  return { score, confluence };
 }
 
 // =========================
-// 🧠 SCORING ENGINE
+// 🧠 FINAL SIGNAL
 // =========================
-function generateSignal(trendObj, pattern, rsi, volatility) {
+function generateSignal(data) {
   let score = 50;
   let reasons = [];
 
-  // Trend
-  if (trendObj.trend === "BULLISH") {
+  const { trendShort, trendMedium, trendLong, pattern, rsi, volatility, conf } = data;
+
+  // Confluence
+  if (conf.score >= 2) {
     score += 15;
-    reasons.push("Uptrend detected");
+    reasons.push("Bullish alignment");
   }
-  if (trendObj.trend === "BEARISH") {
+  if (conf.score <= -2) {
     score -= 15;
-    reasons.push("Downtrend detected");
+    reasons.push("Bearish alignment");
   }
 
   // Pattern
   if (pattern === "DOUBLE_BOTTOM") {
-    score += 20;
-    reasons.push("Double bottom reversal");
+    score += 15;
+    reasons.push("Double bottom");
   }
   if (pattern === "DOUBLE_TOP") {
-    score -= 20;
-    reasons.push("Double top resistance");
-  }
-  if (pattern === "BREAKOUT") {
-    score += 25;
-    reasons.push("Breakout detected");
+    score -= 15;
+    reasons.push("Double top");
   }
 
   // RSI
   if (rsi < 35) {
-    score += 15;
-    reasons.push("Oversold (RSI)");
+    score += 10;
+    reasons.push("Oversold");
   }
   if (rsi > 70) {
-    score -= 15;
-    reasons.push("Overbought (RSI)");
+    score -= 10;
+    reasons.push("Overbought");
   }
 
   // Volatility
@@ -191,7 +209,6 @@ function generateSignal(trendObj, pattern, rsi, volatility) {
     risk = "MEDIUM";
   }
 
-  // Final Signal
   let signal = "HOLD";
   if (score > 65) signal = "BUY";
   if (score < 35) signal = "SELL";
@@ -219,20 +236,37 @@ app.get("/api/signal", async (req, res) => {
       saveDataPoint(symbol, closes.at(-1), volumes.at(-1));
     }
 
-    const trendObj = detectTrend(closes);
+    const trendShort = getTrend(closes, 10);
+    const trendMedium = getTrend(closes, 25);
+    const trendLong = getTrend(closes, 60);
+
+    const conf = confluenceEngine(trendShort, trendMedium, trendLong);
     const pattern = detectPattern(closes);
     const rsi = calculateRSI(closes);
     const volatility = calculateVolatility(closes);
 
-    const result = generateSignal(trendObj, pattern, rsi, volatility);
+    const result = generateSignal({
+      trendShort,
+      trendMedium,
+      trendLong,
+      pattern,
+      rsi,
+      volatility,
+      conf
+    });
 
     res.json({
       symbol,
-      trend: trendObj.trend,
-      trendStrength: trendObj.strength,
-      pattern,
+      timeframes: {
+        short: trendShort,
+        medium: trendMedium,
+        long: trendLong
+      },
+      confluence: conf.confluence,
+      alignmentScore: conf.score,
       rsi: Math.round(rsi),
       volatility,
+      pattern,
       ...result
     });
 
