@@ -10,7 +10,12 @@ const PORT = process.env.PORT || 3000;
 app.get("/api/price", async (req, res) => {
   try {
     const url = "https://query1.finance.yahoo.com/v8/finance/chart/ANANDRATHI.NS?range=2y&interval=1d";
-    const response = await fetch(url);
+    const response = await fetch(url, {
+  headers: {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json"
+  }
+});
     const json = await response.json();
 
     const result = json.chart.result[0];
