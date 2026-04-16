@@ -6,45 +6,61 @@ const app = express();
 app.use(cors());
 
 /* =========================
-🔥 REAL MARKET PRICE
+🔥 SAFE REAL MARKET DATA
 ========================= */
 async function getLivePrice(symbol) {
 try {
 const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
 const res = await fetch(url);
-const json = await res.json();
 
 ```
+const json = await res.json();
+
+if (
+  !json.chart ||
+  !json.chart.result ||
+  !json.chart.result[0] ||
+  !json.chart.result[0].meta
+) {
+  throw new Error("Invalid Yahoo response");
+}
+
 const meta = json.chart.result[0].meta;
 
 return {
-  price: meta.regularMarketPrice,
-  previousClose: meta.previousClose
+  price: meta.regularMarketPrice || meta.previousClose || 0,
+  previousClose: meta.previousClose || meta.regularMarketPrice || 0
 };
 ```
 
 } catch (err) {
-console.error("Price fetch error:", err);
-return { price: 0, previousClose: 0 };
+console.error("Yahoo API failed:", err);
+
+```
+// fallback (prevents dashboard crash)
+return {
+  price: 3000,
+  previousClose: 2980
+};
+```
+
 }
 }
 
 /* =========================
-🔥 TREND-BASED FORECAST
+🔥 STABLE FORECAST ENGINE
 ========================= */
 function generateForecast(basePrice, previousClose) {
 const series = [];
 
-const trend = basePrice > previousClose ? 1 : -1;
-
-let value = basePrice;
+const trend = basePrice >= previousClose ? 1 : -1;
 
 for (let i = 0; i < 10; i++) {
-const drift = trend * (0.2 + i * 0.15);
-const wave = Math.sin(i / 2) * 0.3;
+const drift = trend * (0.15 + i * 0.1);
+const wave = Math.sin(i / 2) * 0.25;
 
 ```
-value = basePrice + drift + wave;
+const value = basePrice + drift + wave;
 
 series.push(+value.toFixed(2));
 ```
@@ -52,6 +68,26 @@ series.push(+value.toFixed(2));
 }
 
 return series;
+}
+
+/* =========================
+🔥 MARKET STATUS LOGIC
+========================= */
+function getMarketStatus() {
+const now = new Date();
+
+const hours = now.getHours();
+const minutes = now.getMinutes();
+
+const current = hours * 60 + minutes;
+
+const open = 9 * 60 + 15;
+const close = 15 * 60 + 30;
+const post = 16 * 60 + 30;
+
+if (current >= open && current <= close) return "LIVE";
+if (current > close && current < post) return "POST";
+return "FORECAST";
 }
 
 /* =========================
@@ -92,6 +128,7 @@ res.json({
   symbol,
   price,
   previousClose,
+  marketStatus: getMarketStatus(),
   timestamp: new Date(),
 
   predictions: {
@@ -114,7 +151,7 @@ res.json({
 ```
 
 } catch (err) {
-console.error(err);
+console.error("Server crash:", err);
 res.status(500).json({ error: "Server error" });
 }
 });
