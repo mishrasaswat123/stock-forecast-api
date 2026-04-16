@@ -1,116 +1,129 @@
 import express from "express";
+import fetch from "node-fetch";
 import cors from "cors";
 
 const app = express();
 app.use(cors());
 
-/**
- * MARKET STATUS LOGIC (IST)
- */
-function getMarketStatus() {
-  const now = new Date();
+/* =========================
+🔥 REAL MARKET PRICE
+========================= */
+async function getLivePrice(symbol) {
+try {
+const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
+const res = await fetch(url);
+const json = await res.json();
 
-  const istOffset = 5.5 * 60 * 60 * 1000;
-  const istTime = new Date(now.getTime() + istOffset);
+```
+const meta = json.chart.result[0].meta;
 
-  const hours = istTime.getUTCHours();
-  const minutes = istTime.getUTCMinutes();
+return {
+  price: meta.regularMarketPrice,
+  previousClose: meta.previousClose
+};
+```
 
-  const totalMinutes = hours * 60 + minutes;
-
-  const marketOpen = 9 * 60 + 15;   // 9:15 AM
-  const marketClose = 15 * 60 + 30; // 3:30 PM
-  const postMarket = 16 * 60 + 30;  // 4:30 PM
-
-  if (totalMinutes >= marketOpen && totalMinutes <= marketClose) {
-    return "LIVE";
-  } else if (totalMinutes > marketClose && totalMinutes < postMarket) {
-    return "POST";
-  } else {
-    return "FORECAST";
-  }
+} catch (err) {
+console.error("Price fetch error:", err);
+return { price: 0, previousClose: 0 };
+}
 }
 
-/**
- * GENERATE FORECAST CURVE
- */
-function generateForecastSeries(price) {
-  const series = [];
-  let base = price;
+/* =========================
+🔥 TREND-BASED FORECAST
+========================= */
+function generateForecast(basePrice, previousClose) {
+const series = [];
 
-  for (let i = 0; i < 10; i++) {
-    base += (Math.random() - 0.4) * 8; // slight upward bias
-    series.push(Number(base.toFixed(2)));
-  }
+const trend = basePrice > previousClose ? 1 : -1;
 
-  return series;
+let value = basePrice;
+
+for (let i = 0; i < 10; i++) {
+const drift = trend * (0.2 + i * 0.15);
+const wave = Math.sin(i / 2) * 0.3;
+
+```
+value = basePrice + drift + wave;
+
+series.push(+value.toFixed(2));
+```
+
 }
 
-/**
- * ROOT
- */
-app.get("/", (req, res) => {
-  res.send("Stock Forecast API Running 🚀");
-});
+return series;
+}
 
-/**
- * MAIN API
- */
+/* =========================
+🔥 API
+========================= */
 app.get("/api/predict", async (req, res) => {
-  try {
-    const symbol = req.query.symbol || "TCS.NS";
+try {
+const symbol = req.query.symbol || "TCS.NS";
 
-    // Simulated price (replace later with real market API)
-    const price = Math.random() * 1000 + 2500;
+```
+const market = await getLivePrice(symbol);
 
-    const marketStatus = getMarketStatus();
+const price = market.price;
+const previousClose = market.previousClose;
 
-    const hourlySeries = generateForecastSeries(price);
+const hourlySeries = generateForecast(price, previousClose);
 
-    // 3-day structured forecast
-    const day1 = price + Math.random() * 20;
-    const day2 = day1 + Math.random() * 15;
-    const day3 = day2 + Math.random() * 15;
+const day1 = +(price * 1.005).toFixed(2);
+const day2 = +(price * 1.01).toFixed(2);
+const day3 = +(price * 1.015).toFixed(2);
+const weekly = +(price * 1.02).toFixed(2);
 
-    res.json({
-      symbol,
-      price: Number(price.toFixed(2)),
-      marketStatus,
-      timestamp: new Date(),
+let signal = "HOLD";
+let bias = "SIDEWAYS";
+let risk = "MEDIUM";
 
-      predictions: {
-        hourly: Number(hourlySeries[0].toFixed(2)),
-        hourlySeries,
+if (price > previousClose) {
+  signal = "BUY";
+  bias = "BULLISH";
+  risk = "LOW";
+} else if (price < previousClose) {
+  signal = "SELL";
+  bias = "BEARISH";
+  risk = "HIGH";
+}
 
-        day1: Number(day1.toFixed(2)),
-        day2: Number(day2.toFixed(2)),
-        day3: Number(day3.toFixed(2)),
+res.json({
+  symbol,
+  price,
+  previousClose,
+  timestamp: new Date(),
 
-        weekly: Number((day3 + Math.random() * 40).toFixed(2))
-      },
+  predictions: {
+    hourly: hourlySeries[1],
+    hourlySeries,
+    day1,
+    day2,
+    day3,
+    weekly
+  },
 
-      support: Number((price - 30).toFixed(2)),
-      resistance: Number((price + 30).toFixed(2)),
-      confidence: Math.floor(Math.random() * 30) + 70,
+  support: +(price * 0.99).toFixed(2),
+  resistance: +(price * 1.01).toFixed(2),
 
-      signal: "HOLD",
-      bias: "SIDEWAYS",
-      risk: "MEDIUM"
-    });
+  confidence: 90,
+  signal,
+  bias,
+  risk
+});
+```
 
-  } catch (err) {
-    console.error("ERROR:", err);
-    res.status(500).json({
-      error: "Internal Server Error"
-    });
-  }
+} catch (err) {
+console.error(err);
+res.status(500).json({ error: "Server error" });
+}
 });
 
-/**
- * START SERVER
- */
+/* =========================
+SERVER
+========================= */
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+console.log("🚀 Server running on port", PORT);
 });
