@@ -30,15 +30,12 @@ function isMarketOpen() {
 }
 
 // =========================
-// 💾 SAVE DATA (HOURLY)
+// 💾 SAVE HOURLY DATA
 // =========================
 function saveDataPoint(ltp, volume) {
   const now = new Date();
 
-  // Save only once per hour
-  if (lastSavedTime && now - lastSavedTime < 60 * 60 * 1000) {
-    return;
-  }
+  if (lastSavedTime && now - lastSavedTime < 60 * 60 * 1000) return;
 
   const indiaTime = new Date(
     now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
@@ -72,13 +69,13 @@ app.get("/api/price", async (req, res) => {
   try {
     const marketOpen = isMarketOpen();
 
-    // Return cached if market closed
     if (!marketOpen && lastResult) {
       return res.json(lastResult);
     }
 
+    // 🔥 FULL HISTORY (PHASE 1B)
     const url =
-      "https://query1.finance.yahoo.com/v8/finance/chart/ANANDRATHI.NS?range=2y&interval=1d";
+      "https://query1.finance.yahoo.com/v8/finance/chart/ANANDRATHI.NS?range=max&interval=1d";
 
     const response = await fetch(url, {
       headers: {
@@ -97,10 +94,10 @@ app.get("/api/price", async (req, res) => {
     const prev = closes.at(-2);
     const changePct = (ltp - prev) / prev;
 
-    // 💾 Save hourly data
+    // 💾 SAVE ONLY DURING MARKET HOURS
     if (marketOpen) {
-  saveDataPoint(ltp, volumes.at(-1));
-}
+      saveDataPoint(ltp, volumes.at(-1));
+    }
 
     // =========================
     // RSI
@@ -155,7 +152,7 @@ app.get("/api/price", async (req, res) => {
     if (recentVol < avgVol * 0.8) volumeSignal = "DISTRIBUTION";
 
     // =========================
-    // MOMENTUM
+    // MOMENTUM ENGINE
     // =========================
     let momentum = changePct;
 
@@ -177,7 +174,7 @@ app.get("/api/price", async (req, res) => {
     );
 
     // =========================
-    // FORECAST ENGINE
+    // FORECASTS
     // =========================
     let hourly = [],
       base = ltp;
