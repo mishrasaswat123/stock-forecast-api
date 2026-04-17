@@ -1,68 +1,81 @@
 import express from "express";
 import cors from "cors";
-import axios from "axios";
 
 const app = express();
 app.use(cors());
 
-const API_KEY = "TMHAGIE1AVVRN73H";
+// 👉 Simple Yahoo Finance fetch (no library, no breakage)
+async function getStockPrice(symbol) {
+  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbol}`;
+
+  const res = await fetch(url);
+  const data = await res.json();
+
+  const result = data?.quoteResponse?.result?.[0];
+
+  if (!result) throw new Error("Invalid Yahoo response");
+
+  return {
+    price: result.regularMarketPrice,
+    previousClose: result.regularMarketPreviousClose
+  };
+}
+
+// 👉 Prediction engine (stable + smooth)
+function generatePredictions(price) {
+  const hourlySeries = [];
+
+  let current = price;
+
+  for (let i = 0; i < 10; i++) {
+    const change = (Math.random() - 0.5) * 0.005 * price; // very small moves
+    current += change;
+    hourlySeries.push(Number(current.toFixed(2)));
+  }
+
+  return {
+    hourly: hourlySeries[1],
+    hourlySeries,
+    day1: Number((price * 1.005).toFixed(2)),
+    day2: Number((price * 1.01).toFixed(2)),
+    day3: Number((price * 1.015).toFixed(2)),
+    weekly: Number((price * 1.03).toFixed(2))
+  };
+}
 
 app.get("/api/predict", async (req, res) => {
   try {
-    const symbol = (req.query.symbol || "RELIANCE").replace(".NS", "") + ".BSE";
+    let symbol = req.query.symbol || "RELIANCE.NS";
 
-    const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${API_KEY}`;
-
-    const response = await axios.get(url);
-
-    const data = response.data["Global Quote"];
-
-    if (!data || !data["05. price"]) {
-      return res.json({
-        error: "Invalid API response",
-        raw: response.data
-      });
+    // 👉 Ensure proper Yahoo format
+    if (!symbol.includes(".")) {
+      symbol = symbol + ".NS";
     }
 
-    const price = parseFloat(data["05. price"]);
-    const prevClose = parseFloat(data["08. previous close"]);
+    const stock = await getStockPrice(symbol);
 
-    // 📈 Stable forecast (NO wild swings)
-    const hourlySeries = Array.from({ length: 10 }, (_, i) =>
-      +(price * (1 + 0.001 * i)).toFixed(2)
-    );
+    const predictions = generatePredictions(stock.price);
 
     res.json({
       symbol,
-      price,
-      previousClose: prevClose,
-      predictions: {
-        hourly: hourlySeries[1],
-        hourlySeries,
-        day1: +(price * 1.005).toFixed(2),
-        day2: +(price * 1.01).toFixed(2),
-        day3: +(price * 1.015).toFixed(2),
-        weekly: +(price * 1.02).toFixed(2),
-      },
-      support: +(price * 0.98).toFixed(2),
-      resistance: +(price * 1.02).toFixed(2),
+      price: stock.price,
+      previousClose: stock.previousClose,
+      predictions,
+      support: Number((stock.price * 0.98).toFixed(2)),
+      resistance: Number((stock.price * 1.02).toFixed(2)),
       signal: "HOLD",
       bias: "SIDEWAYS",
-      risk: "MEDIUM",
+      risk: "MEDIUM"
     });
 
   } catch (err) {
-    console.log("ERROR:", err.message);
+    console.error("ERROR:", err.message);
 
     res.json({
       error: "Server error",
       details: err.message
     });
   }
-});
-
-app.get("/", (req, res) => {
-  res.send("API running");
 });
 
 const PORT = process.env.PORT || 10000;
