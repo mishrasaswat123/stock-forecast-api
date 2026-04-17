@@ -1,31 +1,33 @@
 import express from "express";
 import cors from "cors";
+import axios from "axios";
 
 const app = express();
 app.use(cors());
 
-// 👉 Fetch from Yahoo
+// 👉 Fetch from Yahoo (robust)
 async function fetchYahoo(symbol) {
   const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbol}`;
 
-  const res = await fetch(url);
-  const data = await res.json();
+  const res = await axios.get(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0"
+    }
+  });
 
-  return data?.quoteResponse?.result?.[0];
+  return res.data?.quoteResponse?.result?.[0];
 }
 
-// 👉 Smart symbol resolver (NS → BO fallback)
+// 👉 Smart symbol resolver
 async function getStock(symbolInput) {
   let symbol = symbolInput;
 
   if (!symbol.includes(".")) {
-    // Try NSE first
     let data = await fetchYahoo(symbol + ".NS");
     if (data && data.regularMarketPrice) {
       return { ...data, symbol: symbol + ".NS" };
     }
 
-    // fallback to BSE
     data = await fetchYahoo(symbol + ".BO");
     if (data && data.regularMarketPrice) {
       return { ...data, symbol: symbol + ".BO" };
@@ -35,20 +37,21 @@ async function getStock(symbolInput) {
   }
 
   const data = await fetchYahoo(symbol);
+
   if (!data || !data.regularMarketPrice) {
     throw new Error("Invalid Yahoo response");
   }
 
-  return data;
+  return { ...data, symbol };
 }
 
-// 👉 Smooth prediction (no wild jumps)
+// 👉 Smooth predictions
 function generatePredictions(price) {
   const hourlySeries = [];
   let current = price;
 
   for (let i = 0; i < 10; i++) {
-    const change = (Math.random() - 0.5) * 0.002 * price; // smoother
+    const change = (Math.random() - 0.5) * 0.002 * price;
     current += change;
     hourlySeries.push(Number(current.toFixed(2)));
   }
@@ -87,7 +90,7 @@ app.get("/api/predict", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("ERROR:", err.message);
+    console.error("FULL ERROR:", err);
 
     res.json({
       error: "Server error",
