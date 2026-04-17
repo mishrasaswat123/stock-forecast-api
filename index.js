@@ -1,131 +1,102 @@
 import express from "express";
 import cors from "cors";
+import axios from "axios";
+import crypto from "crypto";
 
 const app = express();
 app.use(cors());
 
-const API_KEY = "TMHAGIE1AVVRN73H";
+// 🔐 ====== PASTE YOUR KEYS HERE ======
+const API_KEY = "~1)q=1C6152a1@09m169TS93X4890spL";
+const SECRET_KEY = "37L51z(y3383u4C45D6y909&1L1Rm725";
+const SESSION_TOKEN = "55328733";
+// ====================================
 
-let cache = {};
-const CACHE_DURATION = 60000; // 1 minute
 
+// 🔁 Generate checksum (ICICI requirement)
+function generateChecksum(timestamp) {
+  const data = timestamp + API_KEY;
+  return crypto
+    .createHmac("sha256", SECRET_KEY)
+    .update(data)
+    .digest("hex");
+}
+
+
+// 📊 MAIN API
 app.get("/api/predict", async (req, res) => {
   try {
-    const symbolMap = {
-      "RELIANCE.NS": "RELIANCE.BSE",
-      "TCS.NS": "TCS.BSE",
-      "INFY.NS": "INFY.BSE",
-      "ANANDRATHI.NS": "ANANDRATHI.BSE"
-    };
+    const symbol = (req.query.symbol || "RELIANCE").replace(".NS", "");
 
-    const inputSymbol = req.query.symbol || "RELIANCE.NS";
-    const symbol = symbolMap[inputSymbol] || "RELIANCE.BSE";
+    const timestamp = new Date().toISOString();
+    const checksum = generateChecksum(timestamp);
 
-    const now = Date.now();
-
-    // ✅ Return cache if exists (always safe)
-    if (cache[inputSymbol] && (now - cache[inputSymbol].time < CACHE_DURATION)) {
-      return res.json({
-        ...cache[inputSymbol].data,
-        cached: true
-      });
-    }
-
-    const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${API_KEY}`;
-
-    const response = await fetch(url);
-    const data = await response.json();
-
-    const quote = data["Global Quote"];
-
-    // ✅ HANDLE API FAILURE WITHOUT CRASH
-    if (!quote || !quote["05. price"]) {
-      console.log("Alpha Vantage limit hit / bad response");
-
-      if (cache[inputSymbol]) {
-        return res.json({
-          ...cache[inputSymbol].data,
-          warning: "Using cached data (API limit hit)"
-        });
+    const response = await axios.get(
+      "https://api.icicidirect.com/breezeapi/api/v1/quotes",
+      {
+        headers: {
+          "X-Checksum": checksum,
+          "X-Timestamp": timestamp,
+          "X-AppKey": API_KEY,
+          "X-SessionToken": SESSION_TOKEN,
+        },
+        params: {
+          stock_code: symbol,
+          exchange_code: "NSE",
+          product_type: "cash",
+        },
       }
+    );
 
-      // fallback dummy (only first time)
-      return res.json({
-        symbol: inputSymbol,
-        price: 3000,
-        previousClose: 2950,
-        warning: "Fallback data (API limit)"
-      });
+    const data = response.data?.Success?.[0];
+
+    if (!data) {
+      return res.json({ error: "Invalid API response" });
     }
 
-    const price = parseFloat(quote["05. price"]);
-    const previousClose = parseFloat(quote["08. previous close"]);
+    const price = parseFloat(data.ltp);
+    const prevClose = parseFloat(data.close);
 
-    const trend = price - previousClose;
-
-    const hourlySeries = [];
-    let base = price;
-
-    for (let i = 0; i < 10; i++) {
-      base = base + trend * 0.05;
-      hourlySeries.push(Number(base.toFixed(2)));
-    }
-
-    const result = {
-      symbol: inputSymbol,
-      price,
-      previousClose,
-      marketStatus: "LIVE",
-      timestamp: new Date(),
-
-      predictions: {
-        hourly: hourlySeries[0],
-        hourlySeries,
-        day1: Number((price + trend * 0.4).toFixed(2)),
-        day2: Number((price + trend * 0.7).toFixed(2)),
-        day3: Number((price + trend * 1.0).toFixed(2)),
-        weekly: Number((price + trend * 1.8).toFixed(2))
-      },
-
-      support: Number((price * 0.98).toFixed(2)),
-      resistance: Number((price * 1.02).toFixed(2)),
-
-      confidence: 85,
-      signal: trend > 0 ? "BUY" : "HOLD",
-      bias: trend > 0 ? "BULLISH" : "SIDEWAYS",
-      risk: "MEDIUM"
-    };
-
-    // ✅ Save cache
-    cache[inputSymbol] = {
-      data: result,
-      time: now
-    };
-
-    res.json(result);
-
-  } catch (err) {
-    console.error("ERROR:", err.message);
-
-    // ✅ ALWAYS fallback
-    if (cache[req.query.symbol]) {
-      return res.json({
-        ...cache[req.query.symbol].data,
-        warning: "Recovered from error"
-      });
-    }
+    // 📈 STABLE FORECAST (no wild swings)
+    const hourlySeries = Array.from({ length: 10 }, (_, i) =>
+      +(price * (1 + 0.001 * i)).toFixed(2)
+    );
 
     res.json({
-      symbol: "ERROR",
-      price: 0,
-      warning: "Temporary failure"
+      symbol,
+      price,
+      previousClose: prevClose,
+      predictions: {
+        hourly: hourlySeries[1],
+        hourlySeries,
+        day1: +(price * 1.005).toFixed(2),
+        day2: +(price * 1.01).toFixed(2),
+        day3: +(price * 1.015).toFixed(2),
+        weekly: +(price * 1.02).toFixed(2),
+      },
+      support: +(price * 0.98).toFixed(2),
+      resistance: +(price * 1.02).toFixed(2),
+      signal: "HOLD",
+      bias: "SIDEWAYS",
+      risk: "MEDIUM",
+    });
+
+  } catch (err) {
+    console.log("FULL ERROR:", err.response?.data || err.message);
+
+    res.json({
+      error: "Server error",
+      details: err.response?.data || err.message,
     });
   }
 });
 
+
+// ✅ Health check
 app.get("/", (req, res) => {
-  res.send("API running 🚀");
+  res.send("Breeze API running");
 });
 
+
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log("Server running"));
+app.listen(PORT, () => console.log("Server running on port", PORT));
