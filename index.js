@@ -1,68 +1,33 @@
 import express from "express";
 import cors from "cors";
 import axios from "axios";
-import crypto from "crypto";
 
 const app = express();
 app.use(cors());
 
-// 🔐 YOUR CREDENTIALS
-const API_KEY = "~1)q=1C6152a1@09m169TS93X4890spL";
-const SECRET_KEY = "37L51z(y3383u4C45D6y909&1L1Rm725";
-const SESSION_TOKEN = "55328798";
-
-// ✅ Correct timestamp format (VERY IMPORTANT)
-function getTimestamp() {
-  return new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
-}
-
-// ✅ Correct checksum format
-function generateChecksum(timestamp) {
-  const data = timestamp + API_KEY;
-  return crypto
-    .createHmac("sha256", SECRET_KEY)
-    .update(data)
-    .digest("hex");
-}
+const API_KEY = "TMHAGIE1AVVRN73H";
 
 app.get("/api/predict", async (req, res) => {
   try {
-    const symbol = (req.query.symbol || "RELIANCE").replace(".NS", "");
+    const symbol = (req.query.symbol || "RELIANCE").replace(".NS", "") + ".BSE";
 
-    const timestamp = getTimestamp();
-    const checksum = generateChecksum(timestamp);
+    const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${API_KEY}`;
 
-    const url = `https://api.icicidirect.com/breezeapi/api/v1/quotes`;
+    const response = await axios.get(url);
 
-    const response = await axios.get(url, {
-      headers: {
-        "X-Checksum": checksum,
-        "X-Timestamp": timestamp,
-        "X-AppKey": API_KEY,
-        "X-SessionToken": SESSION_TOKEN,
-      },
-      params: {
-        stock_code: symbol,
-        exchange_code: "NSE",
-        product_type: "cash",
-      },
-    });
+    const data = response.data["Global Quote"];
 
-    console.log("RAW RESPONSE:", response.data);
-
-    const data = response.data?.Success?.[0];
-
-    if (!data) {
+    if (!data || !data["05. price"]) {
       return res.json({
         error: "Invalid API response",
-        raw: response.data,
+        raw: response.data
       });
     }
 
-    const price = parseFloat(data.ltp);
-    const prevClose = parseFloat(data.close);
+    const price = parseFloat(data["05. price"]);
+    const prevClose = parseFloat(data["08. previous close"]);
 
-    // 📈 Stable forecast
+    // 📈 Stable forecast (NO wild swings)
     const hourlySeries = Array.from({ length: 10 }, (_, i) =>
       +(price * (1 + 0.001 * i)).toFixed(2)
     );
@@ -87,17 +52,17 @@ app.get("/api/predict", async (req, res) => {
     });
 
   } catch (err) {
-    console.log("FULL ERROR:", err.response?.data || err.message);
+    console.log("ERROR:", err.message);
 
     res.json({
       error: "Server error",
-      details: err.response?.data || err.message,
+      details: err.message
     });
   }
 });
 
 app.get("/", (req, res) => {
-  res.send("Breeze API running");
+  res.send("API running");
 });
 
 const PORT = process.env.PORT || 10000;
