@@ -9,7 +9,7 @@ app.use(cors());
 // 🔐 YOUR CREDENTIALS
 const API_KEY = "~1)q=1C6152a1@09m169TS93X4890spL";
 const SECRET_KEY = "37L51z(y3383u4C45D6y909&1L1Rm725";
-const SESSION_TOKEN = "55328733";
+const SESSION_TOKEN = "55328798";
 
 // ✅ Correct timestamp format (VERY IMPORTANT)
 function getTimestamp() {
