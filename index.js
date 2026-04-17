@@ -5,20 +5,24 @@ import axios from "axios";
 const app = express();
 app.use(cors());
 
-// 👉 Fetch from Yahoo (robust)
+// ✅ Yahoo fetch with proper headers (fixes 401)
 async function fetchYahoo(symbol) {
   const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbol}`;
 
   const res = await axios.get(url, {
     headers: {
-      "User-Agent": "Mozilla/5.0"
+      "User-Agent": "Mozilla/5.0",
+      "Accept": "application/json",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Referer": "https://finance.yahoo.com/",
+      "Origin": "https://finance.yahoo.com"
     }
   });
 
   return res.data?.quoteResponse?.result?.[0];
 }
 
-// 👉 Smart symbol resolver
+// ✅ Smart symbol resolver (NSE → BSE fallback)
 async function getStock(symbolInput) {
   let symbol = symbolInput;
 
@@ -45,7 +49,7 @@ async function getStock(symbolInput) {
   return { ...data, symbol };
 }
 
-// 👉 Smooth predictions
+// ✅ Smooth prediction engine
 function generatePredictions(price) {
   const hourlySeries = [];
   let current = price;
@@ -66,6 +70,7 @@ function generatePredictions(price) {
   };
 }
 
+// ✅ API route
 app.get("/api/predict", async (req, res) => {
   try {
     const input = req.query.symbol || "RELIANCE";
@@ -90,13 +95,18 @@ app.get("/api/predict", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("FULL ERROR:", err);
+    console.error("FULL ERROR:", err.message);
 
     res.json({
       error: "Server error",
       details: err.message
     });
   }
+});
+
+// ✅ Health check
+app.get("/", (req, res) => {
+  res.send("Yahoo Finance API running");
 });
 
 const PORT = process.env.PORT || 10000;
